@@ -3,3 +3,4 @@ class JobInput(BaseModel):
     name: str = Field(min_length=2, max_length=160)
     dataset_id: int
     params: dict = Field(default_factory=dict)
+    request_id: str | None = Field(default=None, max_length=80)

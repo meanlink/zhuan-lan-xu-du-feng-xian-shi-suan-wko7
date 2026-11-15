@@ -1,5 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Header, Response
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from src.config.database import get_db
 from src.models import Job
 from src.schemas.job import JobInput
@@ -12,9 +13,20 @@ router=APIRouter(prefix='/jobs')
 def listing(db=Depends(get_db),u=Depends(current_user)):
     return [job_dict(j) for j in db.scalars(select(Job).order_by(Job.id.desc()).limit(100))]
 @router.post('',status_code=201)
-def create(data:JobInput,db=Depends(get_db),u=Depends(can_write)):
-    j=jobs.create(db,data,u); record(db,u.email,'job.create',{'id':j.id,'params':j.params})
-    db.commit(); jobs.enqueue(j.id); return job_dict(j)
+def create(data:JobInput,response:Response,idempotency_key:str|None=Header(None),db=Depends(get_db),u=Depends(can_write)):
+    try:
+        j,created=jobs.create(db,data,u,idempotency_key)
+        if created: record(db,u.email,'job.create',{'id':j.id,'params':j.params,'fee':j.fee})
+        db.commit()
+    except IntegrityError:
+        db.rollback()  # 唯一请求号兜底：并发撞号时整笔回滚，返回已建试验
+        j,same=jobs.replay_checked(db,data,data.request_id or idempotency_key)
+        if j is None: raise HTTPException(409,'请求号与已有试验冲突，请更换请求号')
+        if not same: raise HTTPException(409,'同一请求号提交了不同的试验内容，已整笔拒绝')
+        created=False
+    if created: jobs.enqueue(j.id)
+    else: response.status_code=200  # 同一请求重试：不重复建试验、不重复扣款
+    return job_dict(j)
 @router.get('/{id}')
 def detail(id:int,db=Depends(get_db),u=Depends(current_user)):
     j=db.get(Job,id)
