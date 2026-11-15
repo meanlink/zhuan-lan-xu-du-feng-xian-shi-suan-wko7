@@ -1,0 +1,1 @@
+export const session={token:localStorage.getItem('token'),user:JSON.parse(localStorage.getItem('user')||'null'),save(data){this.token=data.access_token;this.user=data.user;localStorage.setItem('token',this.token);localStorage.setItem('user',JSON.stringify(this.user));},clear(){this.token=null;this.user=null;localStorage.removeItem('token');localStorage.removeItem('user');}};

@@ -1,0 +1,77 @@
+name: reader-risk
+services:
+  db:
+    image: mysql:8.0
+    container_name: ${COMPOSE_PROJECT_NAME:-reader-risk}-db
+    environment:
+      MYSQL_DATABASE: analysis
+      MYSQL_USER: app
+      MYSQL_PASSWORD: ${DB_PASSWORD:-LocalAnalysis2026}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD:-LocalAnalysis2026}
+    ports: ["${DB_PORT:-17707}:3306"]
+    volumes: ["db-data:/var/lib/mysql"]
+    healthcheck:
+      test: ["CMD-SHELL","MYSQL_PWD=\"$$MYSQL_PASSWORD\" mysql --protocol=TCP -h127.0.0.1 -uapp -Danalysis -e \"SELECT 1\" >/dev/null"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+  redis:
+    image: redis:7-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-reader-risk}-redis
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes: ["redis-data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+  backend:
+    build: ./backend
+    container_name: ${COMPOSE_PROJECT_NAME:-reader-risk}-backend
+    environment: &app-env
+      DATABASE_URL: mysql+pymysql://app:${DB_PASSWORD:-LocalAnalysis2026}@db:3306/analysis?charset=utf8mb4
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-reader-risk-development-only}
+      SEED_DEMO: ${SEED_DEMO:-true}
+      ARTIFACT_DIR: /artifacts
+    ports: ["${BACKEND_PORT:-19207}:8000"]
+    volumes: ["analysis-artifacts:/artifacts"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 4s
+      timeout: 3s
+      retries: 35
+      start_period: 15s
+  worker:
+    build: ./backend
+    container_name: ${COMPOSE_PROJECT_NAME:-reader-risk}-worker
+    command: ["python", "-m", "src.worker"]
+    environment: *app-env
+    volumes: ["analysis-artifacts:/artifacts"]
+    depends_on:
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os,time; assert time.time()-os.path.getmtime('/tmp/heartbeat')<30"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+  frontend:
+    build: ./frontend
+    container_name: ${COMPOSE_PROJECT_NAME:-reader-risk}-frontend
+    ports: ["${FRONTEND_PORT:-18207}:80"]
+    depends_on:
+      backend: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1/"]
+      interval: 4s
+      timeout: 3s
+      retries: 20
+volumes:
+  db-data:
+  redis-data:
+  analysis-artifacts:
